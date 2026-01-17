@@ -59,49 +59,12 @@ def parse_date_str(date_str, default_year=2025):
     except: pass
     return None
 
-def read_csv_smart(file, **kwargs):
-    """
-    文字コードを賢く判別して読み込む
-    キーワードが含まれているかで正否を判断する
-    """
-    # 判定したいキーワード群
-    KEYWORDS = ["納品日", "発注日", "部門", "JANコード", "商品名", "週合計"]
-    
-    encodings = ['utf-8', 'cp932'] # 試行順序
-    
-    file.seek(0)
-    
-    # まずは各エンコーディングでプレビュー読み込みをして、キーワードが見つかるか確認
-    valid_encoding = None
-    for enc in encodings:
-        try:
-            file.seek(0)
-            df_check = pd.read_csv(file, encoding=enc, nrows=5, header=0, dtype=str)
-            # カラム名またはデータ内にキーワードが含まれていればOKとみなす
-            content_str = str(df_check.columns.tolist()) + str(df_check.values.tolist())
-            if any(k in content_str for k in KEYWORDS):
-                valid_encoding = enc
-                break
-        except Exception:
-            continue
-            
-    # キーワードが見つからなかった場合でも、とりあえずエラーが出ない方で読む
-    if not valid_encoding:
-        valid_encoding = 'cp932' # デフォルト
-
-    file.seek(0)
-    try:
-        return pd.read_csv(file, encoding=valid_encoding, **kwargs), valid_encoding
-    except Exception:
-        # どうしても読めない場合
-        return pd.DataFrame(), None
-
 # ---------------------------------------------------------
 # データ処理ロジック
 # ---------------------------------------------------------
 
 def process_format_1(df: pd.DataFrame) -> pd.DataFrame:
-    """ODR_RES形式 (トランザクション)"""
+    """ODR_RES形式 (トランザクション / 1行ヘッダー)"""
     rename_map = {
         '納品日': COL_DATE, '部門': COL_DEPT, '商品コード': COL_JAN,
         '商品名': COL_NAME, '発注数量': COL_QTY, '売単価': COL_PRICE,
@@ -124,33 +87,45 @@ def process_format_1(df: pd.DataFrame) -> pd.DataFrame:
     return df[cols].dropna(subset=[COL_DATE])
 
 def process_format_2_from_df(df: pd.DataFrame) -> pd.DataFrame:
-    """OrderCheckList形式 (マトリックス)"""
+    """OrderCheckList形式 (マトリックス / 2行ヘッダー)"""
     # 日付ヘッダーの補完処理
     new_cols = []
     last_top = None
+    
+    # df.columns は MultiIndex
     for top, bottom in df.columns:
         if "Unnamed" not in str(top) and "週合計" not in str(top):
             last_top = top
         final_top = last_top if "Unnamed" in str(top) else top
         new_cols.append((final_top, bottom))
+    
     df.columns = pd.MultiIndex.from_tuples(new_cols)
     
     fixed_col_map = {}
     date_cols = []
+    
+    # カラムマッピングの作成
     for top, bottom in new_cols:
         if "Unnamed" in str(bottom):
+            # 固定列 (JANコード, 商品名など)
             fixed_col_map[(top, bottom)] = top
         elif top is not None and "週合計" not in str(top):
+            # 日付列
             if top not in date_cols: date_cols.append(top)
     
     records = []
     for _, row in df.iterrows():
+        # 固定情報を取得
         base_info = {name: row[col_key] for col_key, name in fixed_col_map.items()}
         jan = base_info.get('JANコード')
+        
+        # JANがない行はスキップ
         if pd.isna(jan): continue
 
+        # 日付ごとの数量・金額・販促を取得
         for date_str in date_cols:
             if not date_str or date_str == "nan": continue
+            
             qty = pd.to_numeric(row.get((date_str, '数量')), errors='coerce')
             if pd.isna(qty) or qty == 0: continue
             
@@ -168,29 +143,84 @@ def process_format_2_from_df(df: pd.DataFrame) -> pd.DataFrame:
                 COL_PROMO: promo_str
             }
             records.append(record)
+            
     return pd.DataFrame(records)
 
 def load_data(uploaded_file) -> pd.DataFrame:
+    """
+    ファイルの先頭をスキャンして、ヘッダー位置とエンコーディングを自動判定して読み込む
+    """
     if uploaded_file is None: return pd.DataFrame()
     
-    # スマート読み込み (header=0でまずは形式判定)
-    df_preview, encoding = read_csv_smart(uploaded_file, header=0, dtype=str)
-    
-    if df_preview.empty:
-        return pd.DataFrame()
+    # ---------------------------------------------------------
+    # 1. 形式とヘッダー位置の自動検出
+    # ---------------------------------------------------------
+    start_row = 0
+    detected_enc = 'cp932' # デフォルト
+    format_type = None # 1: ODR_RES(1行ヘッダー), 2: Matrix(2行ヘッダー)
 
-    cols = list(df_preview.columns)
-    
-    # 形式1 (ODR_RES)
-    if "納品日" in cols:
-        return process_format_1(df_preview)
-        
-    # 形式2 (OrderCheckList) - ヘッダー2行
-    elif "JANコード" in cols or "週合計" in cols:
-        # 形式2確定なので、正しいエンコーディングで header=[0,1] で読み直す
-        uploaded_file.seek(0)
-        df_f2, _ = read_csv_smart(uploaded_file, header=[0, 1])
-        return process_format_2_from_df(df_f2)
+    # ポインタを先頭に戻してサンプル読み込み
+    uploaded_file.seek(0)
+    sample_bytes = uploaded_file.read(8192) # 先頭8KBほど読む
+    uploaded_file.seek(0)
+
+    # エンコーディングとヘッダー行を探す
+    for enc in ['utf-8', 'cp932']:
+        try:
+            text = sample_bytes.decode(enc)
+            lines = text.splitlines()
+            # 最初の30行を確認してキーワードを探す
+            for i, line in enumerate(lines[:30]):
+                # 形式2 (マトリックス形式): "JANコード" と "部門" がある行
+                if "JANコード" in line and "部門" in line:
+                    start_row = i
+                    detected_enc = enc
+                    format_type = 2
+                    break
+                # 形式1 (リスト形式): "納品日" と "部門" がある行
+                if "納品日" in line and "部門" in line:
+                    start_row = i
+                    detected_enc = enc
+                    format_type = 1
+                    break
+            if format_type: break
+        except UnicodeDecodeError:
+            continue
+
+    # ---------------------------------------------------------
+    # 2. 検出結果に基づいて読み込み
+    # ---------------------------------------------------------
+    try:
+        if format_type == 1:
+            # 形式1: ヘッダーは1行
+            df = pd.read_csv(uploaded_file, header=start_row, encoding=detected_enc)
+            return process_format_1(df)
+            
+        elif format_type == 2:
+            # 形式2: ヘッダーは2行 (検出した行とその次の行)
+            df = pd.read_csv(uploaded_file, header=[start_row, start_row+1], encoding=detected_enc)
+            return process_format_2_from_df(df)
+            
+        else:
+            # 自動検出できなかった場合のフォールバック（従来のロジック）
+            # とりあえずヘッダーなし文字列として読んでキーワードを探す
+            uploaded_file.seek(0)
+            df_preview = pd.read_csv(uploaded_file, header=0, encoding='cp932', dtype=str, nrows=10)
+            # キーワード確認
+            cols_str = str(df_preview.columns) + str(df_preview.values)
+            
+            if "JANコード" in cols_str:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, header=[0, 1], encoding='cp932')
+                return process_format_2_from_df(df)
+            elif "納品日" in cols_str:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, header=0, encoding='cp932')
+                return process_format_1(df)
+                
+    except Exception as e:
+        # 読み込みエラー時は空のDFを返す (デバッグ時は print(e) してもよい)
+        pass
         
     return pd.DataFrame()
 
