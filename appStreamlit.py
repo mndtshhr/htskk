@@ -205,7 +205,7 @@ def load_data(uploaded_file) -> pd.DataFrame:
             return process_format_2_from_df(df)
             
         else:
-            # 自動検出できなかった場合のフォールバック（従来のロジック）
+            # 自動検出できなかった場合のフォールバック
             uploaded_file.seek(0)
             df_preview = pd.read_csv(uploaded_file, header=0, encoding='cp932', dtype=str, nrows=10)
             cols_str = str(df_preview.columns) + str(df_preview.values)
@@ -230,29 +230,38 @@ def load_data(uploaded_file) -> pd.DataFrame:
 
 def create_matrix_csv(df: pd.DataFrame) -> bytes:
     """
-    フィルタ済みのdfに含まれる日付カラムのみを使用してCSVを生成する
-    （指定期間による強制0埋めを廃止）
+    JANコード単位で1行にまとめ、アプリ表示と一致させる。
     """
     if df.empty: return b""
     
-    # ピボット作成（この時点でデータが存在する日付だけが列になる）
+    # 1. JANごとのマスタ情報（部門、商品名、単価、販促）を集約して作成
+    #    単価は最大値、販促は最初のものを採用するなど、アプリ表示(agg_view)とロジックを合わせる
+    meta_df = df.groupby(COL_JAN).agg({
+        COL_DEPT: 'first',
+        COL_NAME: 'first',
+        COL_PRICE: 'max',  # 期間中に変動があっても最大値を表示単価とする
+        COL_PROMO: 'first' # 期間中に変動があっても最初のものを表示する
+    })
+
+    # 2. JANと日付だけでピボットテーブルを作成（これで数量が合算される）
     pivot_df = df.pivot_table(
-        index=[COL_DEPT, COL_JAN, COL_NAME, COL_PRICE, COL_PROMO],
-        columns=COL_DATE, values=COL_QTY, aggfunc='sum', fill_value=0
+        index=COL_JAN,
+        columns=COL_DATE, 
+        values=COL_QTY, 
+        aggfunc='sum', 
+        fill_value=0
     )
     
-    # 日付型のカラムだけ抽出してソート
-    date_cols = sorted([c for c in pivot_df.columns if isinstance(c, (datetime.date, datetime.datetime))])
+    # 3. マスタ情報とピボットを結合
+    result_df = pd.concat([meta_df, pivot_df], axis=1).reset_index()
+
+    # 以降はカラム整理（日付カラムの並び替えなど）
+    date_cols = sorted([c for c in result_df.columns if isinstance(c, (datetime.date, datetime.datetime))])
     
-    # データが存在する日付列のみを採用
-    pivot_df = pivot_df[date_cols]
-
     # 合計計算
-    pivot_df['合計数量'] = pivot_df.sum(axis=1)
-    unit_prices = pivot_df.index.get_level_values(COL_PRICE)
-    pivot_df['合計金額'] = pivot_df['合計数量'] * unit_prices
+    result_df['合計数量'] = result_df[date_cols].sum(axis=1)
+    result_df['合計金額'] = result_df['合計数量'] * result_df[COL_PRICE]
 
-    result_df = pivot_df.reset_index()
     col_map = {COL_DEPT: '部門', COL_JAN: 'JAN', COL_NAME: '商品名', COL_PRICE: '単価', COL_PROMO: '販促'}
     date_col_map = {d: d.strftime('%Y/%m/%d') for d in date_cols}
     result_df = result_df.rename(columns={**col_map, **date_col_map})
@@ -261,7 +270,6 @@ def create_matrix_csv(df: pd.DataFrame) -> bytes:
     date_str_cols = [d.strftime('%Y/%m/%d') for d in date_cols]
     final_cols = base_cols + date_str_cols + ['合計数量', '合計金額', '販促']
     
-    # 実際に存在するカラムのみで構成
     existing_cols = [c for c in final_cols if c in result_df.columns]
     result_df = result_df[existing_cols]
     result_df['JAN'] = "'" + result_df['JAN'].astype(str)
@@ -468,7 +476,6 @@ def main():
         st.subheader("📤 データ出力")
         c1, c2 = st.columns(2)
         with c1:
-            # 修正: 引数 (start_d, end_d) を削除し、filtered_df のみ渡す
             csv = create_matrix_csv(filtered_df)
             if csv: st.download_button("📄 マトリックスCSV", csv, f"Order_{datetime.datetime.now():%Y%m%d}.csv", "text/csv", use_container_width=True)
         with c2:
