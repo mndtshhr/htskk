@@ -41,7 +41,10 @@ def clean_dept(dept_val):
     except (ValueError, TypeError):
         return "000"
 
-def parse_date_str(date_str, default_year=2025):
+def parse_date_str(date_str, default_year=None):
+    if default_year is None:
+        default_year = datetime.date.today().year
+        
     s = str(date_str).strip()
     if not s or s.lower() == 'nan': return None
     # 8桁数値 (YYYYMMDD)
@@ -203,10 +206,8 @@ def load_data(uploaded_file) -> pd.DataFrame:
             
         else:
             # 自動検出できなかった場合のフォールバック（従来のロジック）
-            # とりあえずヘッダーなし文字列として読んでキーワードを探す
             uploaded_file.seek(0)
             df_preview = pd.read_csv(uploaded_file, header=0, encoding='cp932', dtype=str, nrows=10)
-            # キーワード確認
             cols_str = str(df_preview.columns) + str(df_preview.values)
             
             if "JANコード" in cols_str:
@@ -218,8 +219,7 @@ def load_data(uploaded_file) -> pd.DataFrame:
                 df = pd.read_csv(uploaded_file, header=0, encoding='cp932')
                 return process_format_1(df)
                 
-    except Exception as e:
-        # 読み込みエラー時は空のDFを返す (デバッグ時は print(e) してもよい)
+    except Exception:
         pass
         
     return pd.DataFrame()
@@ -228,22 +228,26 @@ def load_data(uploaded_file) -> pd.DataFrame:
 # CSV生成・POP生成
 # ---------------------------------------------------------
 
-def create_matrix_csv(df: pd.DataFrame, start_date, end_date) -> bytes:
+def create_matrix_csv(df: pd.DataFrame) -> bytes:
+    """
+    フィルタ済みのdfに含まれる日付カラムのみを使用してCSVを生成する
+    （指定期間による強制0埋めを廃止）
+    """
     if df.empty: return b""
+    
+    # ピボット作成（この時点でデータが存在する日付だけが列になる）
     pivot_df = df.pivot_table(
         index=[COL_DEPT, COL_JAN, COL_NAME, COL_PRICE, COL_PROMO],
         columns=COL_DATE, values=COL_QTY, aggfunc='sum', fill_value=0
     )
-    current_date = start_date
-    date_cols = []
-    while current_date <= end_date:
-        date_cols.append(current_date)
-        current_date += datetime.timedelta(days=1)
     
-    for d in date_cols:
-        if d not in pivot_df.columns: pivot_df[d] = 0
-            
-    pivot_df = pivot_df[sorted(date_cols)]
+    # 日付型のカラムだけ抽出してソート
+    date_cols = sorted([c for c in pivot_df.columns if isinstance(c, (datetime.date, datetime.datetime))])
+    
+    # データが存在する日付列のみを採用
+    pivot_df = pivot_df[date_cols]
+
+    # 合計計算
     pivot_df['合計数量'] = pivot_df.sum(axis=1)
     unit_prices = pivot_df.index.get_level_values(COL_PRICE)
     pivot_df['合計金額'] = pivot_df['合計数量'] * unit_prices
@@ -256,6 +260,8 @@ def create_matrix_csv(df: pd.DataFrame, start_date, end_date) -> bytes:
     base_cols = ['部門', 'JAN', '商品名', '単価']
     date_str_cols = [d.strftime('%Y/%m/%d') for d in date_cols]
     final_cols = base_cols + date_str_cols + ['合計数量', '合計金額', '販促']
+    
+    # 実際に存在するカラムのみで構成
     existing_cols = [c for c in final_cols if c in result_df.columns]
     result_df = result_df[existing_cols]
     result_df['JAN'] = "'" + result_df['JAN'].astype(str)
@@ -462,7 +468,8 @@ def main():
         st.subheader("📤 データ出力")
         c1, c2 = st.columns(2)
         with c1:
-            csv = create_matrix_csv(filtered_df, start_d, end_d)
+            # 修正: 引数 (start_d, end_d) を削除し、filtered_df のみ渡す
+            csv = create_matrix_csv(filtered_df)
             if csv: st.download_button("📄 マトリックスCSV", csv, f"Order_{datetime.datetime.now():%Y%m%d}.csv", "text/csv", use_container_width=True)
         with c2:
             if not agg_view.empty:
