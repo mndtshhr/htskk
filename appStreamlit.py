@@ -25,8 +25,6 @@ COL_PRICE = "unit_price"
 COL_PROMO = "promotion"
 COL_AMOUNT = "total_amount"
 
-st.title("📦 発注データ集計アプリ (Python版)")
-
     # --- 追加コード開始 ---
     st.markdown("""
     <style>
