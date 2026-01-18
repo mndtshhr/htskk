@@ -25,26 +25,7 @@ COL_PRICE = "unit_price"
 COL_PROMO = "promotion"
 COL_AMOUNT = "total_amount"
 
-    # --- 追加コード開始 ---
-    st.markdown("""
-    <style>
-    .reportview-container .main .block-container{
-        padding-top: 2rem;
-    }
-    </style>
-    <div style="background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 20px; border-left: 5px solid #ff4b4b;">
-        <small>⚠️ <b>LINEブラウザをお使いの方へ</b><br>
-        LINE上ではファイルアップロードが動かない場合があります。<br>
-        動かない場合は、右上のメニュー(︙)から<b>「他のブラウザで開く」</b>を選択するか、
-        <a href="?openExternalBrowser=1" target="_blank" style="font-weight:bold; color:#ff4b4b;">こちらをタップして外部ブラウザで開き直してください</a>。
-        </small>
-    </div>
-    """, unsafe_allow_html=True)
-    # --- 追加コード終了 ---
-
-    # サイドバー: ファイル入力
-    st.sidebar.header("1. データ読込")
-
+   
 # ---------------------------------------------------------
 # ユーティリティ関数
 # ---------------------------------------------------------
