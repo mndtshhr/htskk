@@ -25,7 +25,6 @@ COL_PRICE = "unit_price"
 COL_PROMO = "promotion"
 COL_AMOUNT = "total_amount"
 
-   
 # ---------------------------------------------------------
 # ユーティリティ関数
 # ---------------------------------------------------------
@@ -132,7 +131,7 @@ def process_format_2_from_df(df: pd.DataFrame) -> pd.DataFrame:
             
             qty = pd.to_numeric(row.get((date_str, '数量')), errors='coerce')
             
-            # 修正: 数量が0でも読み込むように変更 (NaNのみスキップ)
+            # 修正: 数量が0でも読み込む (NaNのみスキップ)
             if pd.isna(qty): continue
             
             price = pd.to_numeric(row.get((date_str, '売価')), errors='coerce')
@@ -346,6 +345,37 @@ def create_pop_zip(agg_df, raw_df, start_date) -> bytes:
 
 def main():
     st.title("📦 発注データ集計アプリ (Python版)")
+
+    # ----------------------------------------
+    # LINEブラウザ対策の案内 (追加箇所)
+    # ----------------------------------------
+    st.markdown("""
+    <style>
+    .reportview-container .main .block-container{
+        padding-top: 2rem;
+    }
+    </style>
+    <div style="background-color: #f0f2f6; padding: 15px; border-radius: 8px; margin-bottom: 25px; border-left: 6px solid #ff4b4b;">
+        <h4 style="margin:0 0 10px 0; color:#ff4b4b;">⚠️ LINEアプリから開いている方へ</h4>
+        <p style="margin:0; font-size:14px; color:#31333F;">
+            LINEの内蔵ブラウザではファイルのアップロードが動かないことがあります。<br>
+            アップロードボタンが反応しない場合は、画面右上のメニュー(︙)から<b>「他のブラウザで開く」</b>を選択するか、以下のリンクをタップしてください。
+        </p>
+        <div style="margin-top:10px;">
+            <a href="?openExternalBrowser=1" target="_blank" style="
+                display:inline-block;
+                background-color:#ff4b4b;
+                color:white;
+                padding:8px 16px;
+                border-radius:4px;
+                text-decoration:none;
+                font-weight:bold;
+                font-size:14px;">
+                🚀 外部ブラウザで開き直す
+            </a>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # サイドバー: ファイル入力
     st.sidebar.header("1. データ読込")
