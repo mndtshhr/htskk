@@ -130,7 +130,9 @@ def process_format_2_from_df(df: pd.DataFrame) -> pd.DataFrame:
             if not date_str or date_str == "nan": continue
             
             qty = pd.to_numeric(row.get((date_str, '数量')), errors='coerce')
-            if pd.isna(qty) or qty == 0: continue
+            
+            # 修正: 数量が0でも読み込むように変更 (NaNのみスキップ)
+            if pd.isna(qty): continue
             
             price = pd.to_numeric(row.get((date_str, '売価')), errors='coerce')
             promo_val = row.get((date_str, '販促'))
